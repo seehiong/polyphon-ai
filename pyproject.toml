@@ -1,0 +1,99 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "polyphon-ai"
+version = "0.1.0"
+description = "Local, identity-aware transcription and diarization engine"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "seehiong", email = "seehiong@gmail.com" }
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+    "pydantic>=2.0.0",
+    "numpy>=1.24.0",
+    "rich>=13.0.0",
+    "typer>=0.9.0",
+]
+
+[project.optional-dependencies]
+asr = [
+    "faster-whisper>=1.0.0",
+]
+diarization = [
+    "pyannote.audio>=3.1.0",
+    "torch>=2.0.0",
+    "torchaudio>=2.0.0",
+]
+server = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.23.0",
+    # Required by FastAPI to parse multipart form uploads (/upload, /enroll).
+    "python-multipart>=0.0.7",
+]
+bot = [
+    "playwright>=1.40.0",
+]
+all = [
+    "polyphon-ai[asr,diarization,server,bot]",
+]
+dev = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+    "black>=23.0.0",
+]
+
+[project.scripts]
+polyphon = "polyphon.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/seehiong/polyphon"
+Repository = "https://github.com/seehiong/polyphon"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/polyphon"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "PERF"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# load_env() must run before the submodule imports below, which read os.environ
+# for their defaults. The import order here is deliberate.
+"src/polyphon/__init__.py" = ["E402"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Argument", "typer.Option", "fastapi.File", "fastapi.Form", "fastapi.Depends", "File", "Form", "Depends"]
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",
+    "ignore:The anyio.abc.BlockingPortal alias is deprecated:DeprecationWarning",
+]
+
+
+

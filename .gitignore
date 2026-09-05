@@ -1,0 +1,46 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDE & OS files
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Audio artifacts & temporary benchmarks
+*.wav
+*.mp3
+*.mp4
+*.flac
+*.m4a
+meeting*.md
+meeting*.html
+outputs/
+recordings/
+transcripts/
+.env
+!tests/fixtures/*.wav
+scratch/
+runs/
+*.log
+
+# VoiceDB local storage & models
+.voicedb/
+models/
+weights/
+*.npy
+*.safetensors

@@ -1,0 +1,88 @@
+/* Polyphon Studio Custom Stylesheet */
+
+body {
+  font-family: 'Inter', sans-serif;
+  background-color: #0b0f17;
+  color: #f1f5f9;
+}
+
+/* Turn Card Highlights */
+.turn-card {
+  transition: all 0.15s ease-in-out;
+  border-left-width: 4px;
+  border-left-color: transparent;
+}
+
+.turn-card.active {
+  border-color: #3b82f6;
+  border-left-color: #3b82f6;
+  background-color: rgba(59, 130, 246, 0.08);
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.18);
+}
+
+/* Word-Level Karaoke Synchronization */
+.k-word {
+  transition: all 0.06s ease;
+  border-radius: 4px;
+  padding: 1px 3px;
+  display: inline-block;
+  cursor: pointer;
+}
+
+.k-word.current {
+  color: #fef08a !important;
+  background-color: rgba(234, 179, 8, 0.3) !important;
+  font-weight: 700;
+  transform: scale(1.05);
+  box-shadow: 0 0 10px rgba(250, 204, 21, 0.45);
+}
+
+.k-word.past {
+  color: #ffffff;
+  font-weight: 500;
+}
+
+.k-word.future {
+  color: #94a3b8;
+}
+
+.k-word:hover {
+  color: #fde047;
+  background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Action Items Completed State */
+.action-done {
+  text-decoration: line-through;
+  color: #64748b;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #334155;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
+
+/* Clean Verbatim (Filler Word Removal) */
+.k-word.filler {
+  opacity: 0.65;
+  text-decoration: underline dotted rgba(148, 163, 184, 0.4);
+}
+
+.clean-verbatim-active .k-word.filler {
+  display: none !important;
+}
+

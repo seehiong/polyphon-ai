@@ -1,0 +1,39 @@
+# Normalize all text files to LF in the repository.
+# Git checks out the platform-native ending and commits LF, so contributors on
+# Windows and Linux stop producing whole-file diffs from line endings alone.
+* text=auto eol=lf
+
+# Explicit text types (belt and braces for the auto-detection above).
+*.py    text eol=lf
+*.md    text eol=lf
+*.toml  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.js    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.txt   text eol=lf
+
+# Shell scripts must keep LF or they fail to execute on Linux/macOS.
+*.sh    text eol=lf
+
+# Windows-only scripts need CRLF.
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+
+# Binary files: never touch, never diff as text.
+*.jpg   binary
+*.jpeg  binary
+*.png   binary
+*.gif   binary
+*.ico   binary
+*.wav   binary
+*.mp3   binary
+*.mp4   binary
+*.pt    binary
+*.bin   binary
+*.onnx  binary
+
+# Lockfile is generated; collapse it in diffs and PR reviews.
+uv.lock linguist-generated=true
