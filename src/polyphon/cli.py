@@ -509,16 +509,87 @@ def remove_speaker(
         raise typer.Exit(1)
 
 
-def _get_or_create_self_signed_cert() -> tuple[Path, Path]:
+def _get_or_create_self_signed_cert(ssl_dir: Path | None = None) -> tuple[Path, Path]:
     """Generate self-signed SSL certificates for secure LAN access and microphone support."""
     import subprocess
 
-    ssl_dir = Path("~/.polyphon/ssl").expanduser()
-    ssl_dir.mkdir(parents=True, exist_ok=True)
-    cert_file = ssl_dir / "cert.pem"
-    key_file = ssl_dir / "key.pem"
+    target_dir = ssl_dir or Path("~/.polyphon/ssl").expanduser()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    cert_file = target_dir / "cert.pem"
+    key_file = target_dir / "key.pem"
 
-    if not (cert_file.exists() and key_file.exists()):
+    if not (cert_file.exists() and key_file.exists() and cert_file.stat().st_size > 0 and key_file.stat().st_size > 0):
+        # 1. Try pure-Python cryptography generation first if available
+        try:
+            import datetime
+            import ipaddress
+
+            from cryptography import x509
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import rsa
+            from cryptography.x509.oid import NameOID
+
+            key = rsa.generate_private_key(
+                public_exponent=65537,
+                key_size=2048,
+            )
+            name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "PolyphonStudio")])
+            alt_names = [
+                x509.DNSName("localhost"),
+                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+                x509.IPAddress(ipaddress.IPv4Address("0.0.0.0")),
+            ]
+            now = datetime.datetime.now(datetime.timezone.utc)
+            cert = (
+                x509.CertificateBuilder()
+                .subject_name(name)
+                .issuer_name(name)
+                .public_key(key.public_key())
+                .serial_number(x509.random_serial_number())
+                .not_valid_before(now)
+                .not_valid_after(now + datetime.timedelta(days=365))
+                .add_extension(x509.SubjectAlternativeName(alt_names), critical=False)
+                .sign(key, hashes.SHA256())
+            )
+
+            key_bytes = key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.TraditionalOpenSSL,
+                encryption_algorithm=serialization.NoEncryption(),
+            )
+            cert_bytes = cert.public_bytes(serialization.Encoding.PEM)
+
+            key_file.write_bytes(key_bytes)
+            cert_file.write_bytes(cert_bytes)
+            return cert_file, key_file
+        except (ImportError, Exception):
+            pass
+
+        # 2. Fallback to openssl CLI with a bundled configuration (fixes missing openssl.cnf on Windows)
+        cnf_content = """[ req ]
+default_bits = 2048
+prompt = no
+default_md = sha256
+distinguished_name = dn
+x509_extensions = v3_req
+
+[ dn ]
+CN = PolyphonStudio
+
+[ v3_req ]
+basicConstraints = CA:FALSE
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.1 = localhost
+IP.1 = 127.0.0.1
+IP.2 = 0.0.0.0
+"""
+        cnf_file = target_dir / "openssl.cnf"
+        cnf_file.write_text(cnf_content, encoding="utf-8")
+
         cmd = [
             "openssl",
             "req",
@@ -532,13 +603,21 @@ def _get_or_create_self_signed_cert() -> tuple[Path, Path]:
             "-days",
             "365",
             "-nodes",
-            "-subj",
-            "/CN=PolyphonStudio",
+            "-config",
+            str(cnf_file),
         ]
         try:
-            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
         except (subprocess.SubprocessError, FileNotFoundError) as err:
-            raise RuntimeError(f"Could not generate self-signed certificate with openssl: {err}") from err
+            if cert_file.exists():
+                cert_file.unlink(missing_ok=True)
+            if key_file.exists():
+                key_file.unlink(missing_ok=True)
+            stderr = getattr(err, "stderr", None) or ""
+            err_msg = f"Could not generate self-signed certificate with openssl: {err}"
+            if stderr:
+                err_msg += f"\n{stderr.strip()}"
+            raise RuntimeError(err_msg) from err
 
     return cert_file, key_file
 

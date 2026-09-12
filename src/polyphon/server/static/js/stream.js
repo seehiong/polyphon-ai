@@ -156,6 +156,7 @@ async function startLiveStream() {
   const pulseDot = document.getElementById('stream-pulse-dot');
   const statusBadge = document.getElementById('stream-status-badge');
   const diarizerSelect = document.getElementById('stream-diarizer');
+  const maxSpeakersInput = document.getElementById('stream-max-speakers');
   const identifyCheck = document.getElementById('stream-identify');
 
   // Check if browser restricts mediaDevices on insecure HTTP
@@ -279,11 +280,13 @@ async function startLiveStream() {
     const customTitle = (document.getElementById('stream-session-title')?.value || '').trim();
 
     streamSocket.onopen = () => {
+      const maxSpeakersVal = maxSpeakersInput ? parseInt(maxSpeakersInput.value, 10) : NaN;
       streamSocket.send(JSON.stringify({
         action: 'start',
         name: currentLiveSessionName,
         title: customTitle || undefined,
         diarizer: diarizerSelect ? diarizerSelect.value : 'sortformer',
+        max_speakers: Number.isFinite(maxSpeakersVal) && maxSpeakersVal > 0 ? maxSpeakersVal : null,
         identify: identifyCheck ? identifyCheck.checked : false,
         language: langSelect ? langSelect.value : 'en',
         model: modelSelect ? modelSelect.value : 'base',
@@ -387,6 +390,7 @@ async function startFileSimulationStream() {
   const pulseDot = document.getElementById('stream-pulse-dot');
   const statusBadge = document.getElementById('stream-status-badge');
   const diarizerSelect = document.getElementById('stream-diarizer');
+  const maxSpeakersInput = document.getElementById('stream-max-speakers');
   const identifyCheck = document.getElementById('stream-identify');
   const sampleSelect = document.getElementById('sim-sample-select');
 
@@ -433,11 +437,13 @@ async function startFileSimulationStream() {
     const customTitle = (document.getElementById('stream-session-title')?.value || '').trim();
 
     streamSocket.onopen = () => {
+      const maxSpeakersVal = maxSpeakersInput ? parseInt(maxSpeakersInput.value, 10) : NaN;
       streamSocket.send(JSON.stringify({
         action: 'start',
         name: currentLiveSessionName,
         title: customTitle || undefined,
         diarizer: diarizerSelect ? diarizerSelect.value : 'sortformer',
+        max_speakers: Number.isFinite(maxSpeakersVal) && maxSpeakersVal > 0 ? maxSpeakersVal : null,
         identify: identifyCheck ? identifyCheck.checked : false,
         language: langSelect ? langSelect.value : 'en',
         model: modelSelect ? modelSelect.value : 'base',

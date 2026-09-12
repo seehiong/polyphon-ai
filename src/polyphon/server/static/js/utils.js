@@ -10,6 +10,21 @@ function escapeHtml(str) {
   }[m]));
 }
 
+// Shared icon-button markup for the small rename/delete controls repeated across
+// Archive meeting cards and VoiceDB speaker cards, so tooltip/spacing/hover styling
+// can't silently drift between the two (e.g. one growing a tooltip, the other not).
+// Params go through data-* attributes rather than interpolated into the onclick
+// string, so values containing quotes can't break the generated markup.
+function actionIconButton({ icon, tooltip, onClick, variant = 'default', dataAttrs = {} }) {
+  const variantClasses = variant === 'danger'
+    ? 'text-red-400 hover:text-red-300 hover:bg-red-500/10'
+    : 'text-slate-400 hover:text-white hover:bg-slate-700/60';
+  const dataStr = Object.entries(dataAttrs)
+    .map(([k, v]) => `data-${k}="${escapeHtml(String(v))}"`)
+    .join(' ');
+  return `<button onclick="${onClick}" ${dataStr} title="${escapeHtml(tooltip)}" class="text-xs p-1.5 rounded-lg ${variantClasses} transition">${icon}</button>`;
+}
+
 function hashString(str) {
   let hash = 0;
   for (let i = 0; i < (str || '').length; i++) {

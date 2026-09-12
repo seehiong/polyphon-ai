@@ -10,11 +10,11 @@ async function processMeetingById(meetingId) {
 
   const formData = new FormData();
   formData.append('saved_filename', meetingId);
-  formData.append('diarize', 'true');
-  formData.append('identify', 'true');
-  formData.append('infer_names', 'true');
-  formData.append('auto_enroll', 'true');
-  formData.append('summarize', 'true');
+  formData.append('diarize', document.getElementById('opt-diarize')?.checked ? 'true' : 'false');
+  formData.append('identify', document.getElementById('opt-identify')?.checked ? 'true' : 'false');
+  formData.append('infer_names', document.getElementById('opt-infer-names')?.checked ? 'true' : 'false');
+  formData.append('auto_enroll', document.getElementById('opt-auto-enroll')?.checked ? 'true' : 'false');
+  formData.append('summarize', document.getElementById('opt-summarize')?.checked ? 'true' : 'false');
   formData.append('clean_fillers', document.getElementById('opt-clean-fillers')?.checked ? 'true' : 'false');
   formData.append('language', document.getElementById('opt-language')?.value || 'en');
 
@@ -40,6 +40,34 @@ async function processMeetingById(meetingId) {
 function processCurrentMeeting() {
   if (currentLoadedMeetingId) {
     processMeetingById(currentLoadedMeetingId);
+  }
+}
+
+async function regenerateSummary() {
+  const meetingId = currentLoadedMeetingId;
+  if (!meetingId) return;
+  document.getElementById('upload-panel').classList.add('hidden');
+  document.getElementById('results-panel').classList.add('hidden');
+  document.getElementById('progress-panel').classList.remove('hidden');
+
+  const formData = new FormData();
+  formData.append('clean_fillers', document.getElementById('opt-clean-fillers')?.checked ? 'true' : 'false');
+
+  try {
+    const res = await fetch(`/api/meetings/${encodeURIComponent(meetingId)}/resummarize`, {
+      method: 'POST',
+      body: formData
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.detail || `HTTP ${res.status}`);
+    }
+    const jobData = await res.json();
+    connectSSE(jobData.job_id);
+  } catch (err) {
+    alert('Failed to regenerate summary: ' + err.message);
+    document.getElementById('progress-panel').classList.add('hidden');
+    document.getElementById('results-panel').classList.remove('hidden');
   }
 }
 
@@ -157,23 +185,20 @@ function renderArchiveCards(items, query = '') {
       ? `<span class="inline-block text-[10px] px-2 py-0.5 rounded bg-purple-950/80 text-purple-300 border border-purple-800/60 font-medium">⚖️ Compared</span>`
       : '';
 
+    const actionBtnBase = 'text-[11px] px-2.5 py-1 rounded whitespace-nowrap transition flex items-center gap-1';
+
     const processBtn = item.is_live_only
-      ? `<button onclick="processArchiveMeeting(this.getAttribute('data-meeting-id'), true)" data-meeting-id="${escapeHtml(item.id)}" title="Process with full offline AI Pipeline" class="text-[11px] px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-medium transition flex items-center gap-1 shadow"><span>🚀</span> Process</button>`
-      : `<button onclick="processArchiveMeeting(this.getAttribute('data-meeting-id'), false)" data-meeting-id="${escapeHtml(item.id)}" title="Re-process meeting with full AI Pipeline (Whisper + Diarization + VoiceDB + LLM)" class="text-[11px] px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition flex items-center gap-1"><span>🔄</span> Reprocess</button>`;
+      ? `<button onclick="processArchiveMeeting(this.getAttribute('data-meeting-id'), true)" data-meeting-id="${escapeHtml(item.id)}" title="Process with full offline AI Pipeline" class="${actionBtnBase} bg-emerald-600 hover:bg-emerald-500 text-white font-medium shadow"><span>🚀</span> Process</button>`
+      : `<button onclick="processArchiveMeeting(this.getAttribute('data-meeting-id'), false)" data-meeting-id="${escapeHtml(item.id)}" title="Re-process meeting with full AI Pipeline (Whisper + Diarization + VoiceDB + LLM)" class="${actionBtnBase} bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"><span>🔄</span> Reprocess</button>`;
 
     const compareBtn = item.has_comparison
-      ? `<button onclick="openCompareModal(this.getAttribute('data-meeting-id'))" data-meeting-id="${escapeHtml(item.id)}" title="Compare Live vs Processed" class="text-[11px] px-2.5 py-1 rounded bg-purple-900/60 hover:bg-purple-900/90 text-purple-300 border border-purple-700 transition flex items-center gap-1"><span>⚖️</span> Compare</button>`
+      ? `<button onclick="openCompareModal(this.getAttribute('data-meeting-id'))" data-meeting-id="${escapeHtml(item.id)}" title="Compare Live vs Processed" class="${actionBtnBase} bg-purple-900/60 hover:bg-purple-900/90 text-purple-300 border border-purple-700"><span>⚖️</span> Compare</button>`
       : '';
 
     card.innerHTML = `
       <div class="flex items-start justify-between gap-2">
         <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-1.5 group min-w-0">
-            <h4 class="font-semibold text-sm text-white capitalize truncate cursor-pointer hover:text-blue-300 transition" onclick="promptRenameMeeting(this.getAttribute('data-meeting-id'), this.getAttribute('data-title'))" data-meeting-id="${escapeHtml(item.id)}" data-title="${escapeHtml(item.title)}" title="Click to rename meeting">${escapeHtml(item.title)}</h4>
-            <button onclick="promptRenameMeeting(this.getAttribute('data-meeting-id'), this.getAttribute('data-title'))" data-meeting-id="${escapeHtml(item.id)}" data-title="${escapeHtml(item.title)}" title="Rename meeting title" class="text-xs text-slate-500 hover:text-blue-400 p-0.5 rounded transition opacity-70 hover:opacity-100 flex-shrink-0">
-              ✏️
-            </button>
-          </div>
+          <h4 class="font-semibold text-sm text-white capitalize truncate cursor-pointer hover:text-blue-300 transition" onclick="promptRenameMeeting(this.getAttribute('data-meeting-id'), this.getAttribute('data-title'))" data-meeting-id="${escapeHtml(item.id)}" data-title="${escapeHtml(item.title)}" title="Click to rename meeting">${escapeHtml(item.title)}</h4>
           <div class="flex flex-wrap items-center gap-1.5 mt-1.5">
             ${dateBadge}
             <span class="inline-block text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">⏱️ ${m}m ${s}s</span>
@@ -181,21 +206,33 @@ function renderArchiveCards(items, query = '') {
             ${cmpBadge}
           </div>
         </div>
-        <button onclick="promptDeleteMeeting(this.getAttribute('data-meeting-id'))" data-meeting-id="${escapeHtml(item.id)}" title="Delete meeting" class="text-xs text-red-400 hover:text-red-300 p-1.5 rounded-lg hover:bg-red-500/10 transition flex-shrink-0">
-          🗑️
-        </button>
+        <div class="flex items-center gap-1 flex-shrink-0">
+          ${actionIconButton({
+            icon: '✏️',
+            tooltip: 'Rename meeting title',
+            onClick: "promptRenameMeeting(this.getAttribute('data-meeting-id'), this.getAttribute('data-title'))",
+            dataAttrs: { 'meeting-id': item.id, title: item.title },
+          })}
+          ${actionIconButton({
+            icon: '🗑️',
+            tooltip: 'Delete meeting',
+            variant: 'danger',
+            onClick: "promptDeleteMeeting(this.getAttribute('data-meeting-id'))",
+            dataAttrs: { 'meeting-id': item.id },
+          })}
+        </div>
       </div>
       <p class="text-xs text-slate-400 line-clamp-3">${escapeHtml(item.summary_snippet)}</p>
-      <div class="flex items-center justify-between pt-2 border-t border-slate-800/80">
-        <span class="text-[11px] text-slate-500">👥 ${item.speakers_count} • 💬 ${item.turns_count} turns</span>
-        <div class="flex items-center gap-1.5">
+      <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+        <span class="text-[11px] text-slate-500 whitespace-nowrap">👥 ${item.speakers_count} • 💬 ${item.turns_count} turns</span>
+        <div class="flex flex-wrap items-center justify-end gap-1.5">
           ${processBtn}
           ${compareBtn}
-          <button onclick="openMeetingInStudio(this.getAttribute('data-meeting-id'))" data-meeting-id="${escapeHtml(item.id)}" class="text-[11px] px-2.5 py-1 rounded bg-blue-600 hover:bg-blue-500 text-white font-medium transition flex items-center gap-1">
+          <button onclick="openMeetingInStudio(this.getAttribute('data-meeting-id'))" data-meeting-id="${escapeHtml(item.id)}" class="${actionBtnBase} bg-blue-600 hover:bg-blue-500 text-white font-medium">
             <span>▶️</span> Play in Studio
           </button>
-          ${item.html_url ? `<a href="${item.html_url}" target="_blank" class="text-[11px] px-2 py-1 rounded bg-blue-900/40 hover:bg-blue-900/60 text-blue-300 border border-blue-800 transition">View Report</a>` : ''}
-          ${item.json_url ? `<a href="${item.json_url}" download class="text-[11px] px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition">JSON</a>` : ''}
+          ${item.html_url ? `<a href="${item.html_url}" target="_blank" class="${actionBtnBase} bg-blue-900/40 hover:bg-blue-900/60 text-blue-300 border border-blue-800">View Report</a>` : ''}
+          ${item.json_url ? `<a href="${item.json_url}" download class="${actionBtnBase} bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700">JSON</a>` : ''}
         </div>
       </div>
     `;

@@ -4,13 +4,33 @@ build-backend = "hatchling.build"
 
 [project]
 name = "polyphon-ai"
-version = "0.1.1"
+version = "0.2.0"
 description = "Local, identity-aware transcription and diarization engine"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
     { name = "seehiong", email = "seehiong@gmail.com" }
+]
+keywords = [
+    "speech-to-text",
+    "transcription",
+    "speaker-diarization",
+    "speaker-recognition",
+    "voiceprint",
+    "asr",
+    "whisper",
+    "faster-whisper",
+    "pyannote",
+    "sortformer",
+    "offline",
+    "privacy",
+    "local-first",
+    "self-hosted",
+    "ollama",
+    "llm",
+    "meeting-notes",
+    "audio-processing",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -40,6 +60,12 @@ diarization = [
     "torch>=2.0.0",
     "torchaudio>=2.0.0",
 ]
+sortformer = [
+    # Real NeMo Sortformer EEND model for SortformerDiarizer. Without this, SortformerDiarizer
+    # silently falls back to a crude spectral-centroid heuristic that doesn't track real speaker
+    # identity. Note: the pretrained "diar_sortformer_4spk-v1" checkpoint supports at most 4 speakers.
+    "nemo_toolkit[asr]>=2.0.0",
+]
 server = [
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.23.0",
@@ -50,7 +76,7 @@ bot = [
     "playwright>=1.40.0",
 ]
 all = [
-    "polyphon-ai[asr,diarization,server,bot]",
+    "polyphon-ai[asr,diarization,sortformer,server,bot]",
 ]
 dev = [
     "pytest>=7.0.0",

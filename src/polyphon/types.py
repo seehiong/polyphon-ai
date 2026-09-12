@@ -78,6 +78,14 @@ class SpeakerStat:
 
 
 @dataclass
+class DiscussionPoint:
+    """A topic discussed in the meeting, with a short summary of what was covered."""
+
+    topic: str
+    summary: str
+
+
+@dataclass
 class Insights:
     """Structured semantic insights extracted by LLM."""
 
@@ -86,6 +94,7 @@ class Insights:
     decisions: list[str] = field(default_factory=list)
     action_items: list[ActionItem] = field(default_factory=list)
     speaker_stats: dict[str, SpeakerStat] = field(default_factory=dict)
+    discussion_points: list[DiscussionPoint] = field(default_factory=list)
 
 
 @dataclass
@@ -157,12 +166,17 @@ class PolyphonResult:
                 )
                 for k, v in ins.get("speaker_stats", {}).items()
             }
+            disc_points = [
+                DiscussionPoint(topic=d.get("topic", ""), summary=d.get("summary", ""))
+                for d in ins.get("discussion_points", [])
+            ]
             insights = Insights(
                 summary=ins.get("summary", ""),
                 topics=ins.get("topics", []),
                 decisions=ins.get("decisions", []),
                 action_items=act_items,
                 speaker_stats=spk_stats,
+                discussion_points=disc_points,
             )
         return cls(
             duration=data.get("duration", 0.0),
@@ -566,3 +580,169 @@ class PolyphonResult:
 </html>
 """
         return html_doc
+
+    def to_mom_html(self, title: str | None = None, meeting_date: str | None = None) -> str:
+        """Export a professional, shareable Minutes of Meeting document.
+
+        Unlike to_html() (an interactive transcript viewer), this is a static,
+        print-friendly summary document meant to be shared with participants:
+        attendees, executive summary, discussion by topic, decisions, and an
+        action-item table — no raw dialogue.
+        """
+        import html as html_escape
+
+        def esc(s: object) -> str:
+            return html_escape.escape(str(s or ""))
+
+        doc_title = title or self.title or "Meeting Minutes"
+        ins = self.insights
+
+        attendee_names: list[str] = []
+        seen: set[str] = set()
+        for spk in self.speakers:
+            name = spk.name or spk.id
+            if name not in seen:
+                seen.add(name)
+                attendee_names.append(name)
+
+        total_min = int(self.duration // 60)
+        hrs, mins = divmod(total_min, 60)
+        duration_str = f"{hrs} hr {mins} min" if hrs > 0 else f"{mins} min"
+
+        meta_parts = []
+        if meeting_date:
+            meta_parts.append(esc(meeting_date))
+        meta_parts.append(duration_str)
+        meta_parts.append(f"{len(attendee_names)} attendee{'s' if len(attendee_names) != 1 else ''}")
+        meta_line = " &nbsp;&bull;&nbsp; ".join(meta_parts)
+
+        attendees_html = "".join(f'<span class="attendee-chip">{esc(n)}</span>' for n in attendee_names) or (
+            '<span class="muted">No attendees recorded</span>'
+        )
+
+        summary_html = ""
+        if ins and ins.summary:
+            summary_html = f"<section><h2>Executive Summary</h2><p>{esc(ins.summary)}</p></section>"
+
+        discussion_html = ""
+        if ins and ins.discussion_points:
+            items = "".join(
+                f'<div class="discussion-item"><h3>{esc(dp.topic)}</h3><p>{esc(dp.summary)}</p></div>'
+                for dp in ins.discussion_points
+            )
+            discussion_html = f"<section><h2>Discussion Summary</h2>{items}</section>"
+        elif ins and ins.topics:
+            # Older meetings extracted before per-topic discussion notes existed.
+            tags = "".join(f'<span class="topic-tag">{esc(t)}</span>' for t in ins.topics)
+            discussion_html = f'<section><h2>Topics Discussed</h2><div class="topic-tags">{tags}</div></section>'
+
+        decisions_html = ""
+        if ins and ins.decisions:
+            items = "".join(f"<li>{esc(d)}</li>" for d in ins.decisions)
+            decisions_html = f'<section><h2>Decisions</h2><ul class="decision-list">{items}</ul></section>'
+
+        actions_html = ""
+        if ins and ins.action_items:
+            rows = "".join(
+                f"<tr><td>{esc(a.task)}</td><td>{esc(a.assignee) if a.assignee else '&mdash;'}</td>"
+                f"<td>{esc(a.due_date) if a.due_date else '&mdash;'}</td></tr>"
+                for a in ins.action_items
+            )
+            actions_html = (
+                '<section><h2>Action Items</h2><table class="action-table">'
+                "<thead><tr><th>Task</th><th>Owner</th><th>Due Date</th></tr></thead>"
+                f"<tbody>{rows}</tbody></table></section>"
+            )
+
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{esc(doc_title)} — Minutes of Meeting</title>
+<style>
+  :root {{ color-scheme: light; }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0; padding: 0; background: #f4f5f7; color: #1f2328;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+  }}
+  .page {{
+    max-width: 780px; margin: 32px auto; background: #ffffff;
+    border: 1px solid #e2e4e8; border-radius: 12px; padding: 48px 56px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+  }}
+  header.doc-header {{ border-bottom: 3px solid #1f2328; padding-bottom: 20px; margin-bottom: 28px; }}
+  .kicker {{
+    text-transform: uppercase; letter-spacing: 0.08em; font-size: 11px;
+    font-weight: 700; color: #6b7280; margin-bottom: 6px;
+  }}
+  h1.doc-title {{ font-size: 26px; font-weight: 700; margin: 0 0 8px 0; color: #111827; }}
+  .meta-line {{ font-size: 13px; color: #6b7280; }}
+  .attendees-block {{ margin-top: 16px; }}
+  .attendees-label {{
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.06em; color: #6b7280; margin-bottom: 8px;
+  }}
+  .attendee-chip {{
+    display: inline-block; background: #eef2ff; color: #3730a3; border: 1px solid #c7d2fe;
+    border-radius: 999px; padding: 3px 12px; font-size: 12.5px; font-weight: 600; margin: 0 6px 6px 0;
+  }}
+  section {{ margin: 30px 0; }}
+  h2 {{
+    font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    color: #111827; border-left: 4px solid #2563eb; padding-left: 10px; margin: 0 0 14px 0;
+  }}
+  section > p {{ margin: 0; font-size: 14px; color: #1f2328; }}
+  .discussion-item {{ margin-bottom: 16px; }}
+  .discussion-item:last-child {{ margin-bottom: 0; }}
+  .discussion-item h3 {{ font-size: 14px; font-weight: 700; margin: 0 0 4px 0; color: #111827; }}
+  .discussion-item p {{ margin: 0; font-size: 13.5px; color: #374151; }}
+  .topic-tags {{ display: flex; flex-wrap: wrap; gap: 6px; }}
+  .topic-tag {{
+    background: #f3f4f6; color: #374151; border: 1px solid #e5e7eb;
+    border-radius: 6px; padding: 3px 10px; font-size: 12.5px; font-weight: 500;
+  }}
+  ul.decision-list {{ margin: 0; padding-left: 20px; }}
+  ul.decision-list li {{ font-size: 14px; font-weight: 600; color: #111827; margin-bottom: 8px; }}
+  ul.decision-list li:last-child {{ margin-bottom: 0; }}
+  table.action-table {{ width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 4px; }}
+  table.action-table th {{
+    text-align: left; background: #f9fafb; color: #6b7280; text-transform: uppercase;
+    font-size: 11px; letter-spacing: 0.04em; padding: 8px 10px; border-bottom: 2px solid #e5e7eb;
+  }}
+  table.action-table td {{ padding: 10px; border-bottom: 1px solid #f0f1f3; color: #1f2328; vertical-align: top; }}
+  table.action-table tr:last-child td {{ border-bottom: none; }}
+  .muted {{ color: #9ca3af; font-size: 13px; font-style: italic; }}
+  footer.doc-footer {{
+    margin-top: 40px; padding-top: 16px; border-top: 1px solid #e5e7eb;
+    font-size: 11px; color: #9ca3af; text-align: center;
+  }}
+  @media print {{
+    body {{ background: #fff; }}
+    .page {{ box-shadow: none; border: none; margin: 0; max-width: 100%; padding: 0; }}
+    section {{ page-break-inside: avoid; }}
+  }}
+</style>
+</head>
+<body>
+  <div class="page">
+    <header class="doc-header">
+      <div class="kicker">Minutes of Meeting</div>
+      <h1 class="doc-title">{esc(doc_title)}</h1>
+      <div class="meta-line">{meta_line}</div>
+      <div class="attendees-block">
+        <div class="attendees-label">Attendees</div>
+        {attendees_html}
+      </div>
+    </header>
+    {summary_html}
+    {discussion_html}
+    {decisions_html}
+    {actions_html}
+    <footer class="doc-footer">Generated by Polyphon AI &middot; Local Meeting Intelligence</footer>
+  </div>
+</body>
+</html>
+"""

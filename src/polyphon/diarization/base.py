@@ -430,38 +430,51 @@ class SortformerDiarizer(DiarizationBackend):
             try:
                 import nemo.collections.asr as nemo_asr
 
-                self._nemo_model = nemo_asr.models.EncDecDiarLabelModel.from_pretrained(model_name=self.model_name)
-                self._nemo_model.eval()
+                try:
+                    model = nemo_asr.models.SortformerEncLabelModel.from_pretrained(model_name=self.model_name)
+                except Exception:
+                    # NeMo's built-in HF downloader can fetch the repo's HTML page instead of the
+                    # actual .nemo checkpoint for this model; fall back to a direct download.
+                    from huggingface_hub import hf_hub_download
+
+                    local_path = hf_hub_download(
+                        repo_id=f"nvidia/{self.model_name}", filename=f"{self.model_name}.nemo"
+                    )
+                    model = nemo_asr.models.SortformerEncLabelModel.restore_from(local_path, map_location="cpu")
+                model.eval()
+                self._nemo_model = model
             except Exception:
-                # NeMo not installed or weights not cached; fallback to neural/spectral engine
+                # NeMo not installed or weights unavailable; fallback to spectral engine
                 self._nemo_model = False
         return self._nemo_model
 
-    def predict_frame_probabilities(self, audio: np.ndarray, sample_rate: int = 16000) -> np.ndarray:
-        """Predict per-frame speaker activation probabilities P in [0, 1]^(T x K)."""
+    def predict_frame_probabilities(
+        self, audio: np.ndarray, sample_rate: int = 16000, max_speakers: int | None = None
+    ) -> np.ndarray:
+        """Predict per-frame speaker activation probabilities P in [0, 1]^(T x K).
+
+        `max_speakers` overrides `self.max_speakers` for this call. It only affects the
+        spectral fallback below — a loaded pretrained NeMo checkpoint (e.g.
+        "diar_sortformer_4spk-v1") has its speaker count K fixed by the trained model
+        weights, so no runtime argument can raise it past what that checkpoint supports.
+        """
         model = self._get_nemo_model()
         if model:
             try:
-                import torch
-
-                tensor = torch.tensor(audio, dtype=torch.float32).unsqueeze(0)
-                length = torch.tensor([audio.shape[0]], dtype=torch.long)
-                with torch.no_grad():
-                    logits = model(input_signal=tensor, input_signal_length=length)
-                    if isinstance(logits, tuple):
-                        logits = logits[0]
-                    probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()
-                    return probs
+                _, preds = model.diarize(audio, sample_rate=sample_rate, include_tensor_outputs=True, verbose=False)
+                probs = preds[0].squeeze(0).cpu().numpy()
+                return probs
             except Exception:
                 pass
 
         # Robust lightweight neural/spectral fallback for test/heterogeneous environments
         # Computes sub-band energy and spectral centroid trajectories to cluster frames into K speakers
+        effective_max_speakers = max_speakers if max_speakers is not None else self.max_speakers
         num_frames = max(1, int(len(audio) / (sample_rate * self.frame_duration)))
         frame_len = int(sample_rate * self.frame_duration)
         hop_len = frame_len
 
-        probs = np.zeros((num_frames, self.max_speakers), dtype=np.float32)
+        probs = np.zeros((num_frames, effective_max_speakers), dtype=np.float32)
         if len(audio) < frame_len:
             return probs
 
@@ -482,10 +495,10 @@ class SortformerDiarizer(DiarizationBackend):
             e = norm_energy[t]
             if e > 0.15:
                 # Assign to speaker based on spectral profile
-                spk_idx = int(np.clip(spec_centers[t] * self.max_speakers, 0, self.max_speakers - 1))
+                spk_idx = int(np.clip(spec_centers[t] * effective_max_speakers, 0, effective_max_speakers - 1))
                 probs[t, spk_idx] = float(np.clip(e * 1.2, 0.0, 1.0))
                 # Slight probability leak for overlapping speech detection
-                alt_idx = (spk_idx + 1) % self.max_speakers
+                alt_idx = (spk_idx + 1) % effective_max_speakers
                 if e > 0.6:
                     probs[t, alt_idx] = float(e * 0.35)
 
@@ -567,7 +580,8 @@ class SortformerDiarizer(DiarizationBackend):
         from polyphon.audio import load_wav_mono_16k
 
         audio, sr = load_wav_mono_16k(audio_path)
-        probs = self.predict_frame_probabilities(audio, sample_rate=sr)
+        effective_max = max_speakers if max_speakers is not None else num_speakers
+        probs = self.predict_frame_probabilities(audio, sample_rate=sr, max_speakers=effective_max)
         if num_speakers is not None and num_speakers > 0:
             probs = probs[:, :num_speakers]
         return self.binarize_probabilities(probs, self.frame_duration, start_offset=0.0)

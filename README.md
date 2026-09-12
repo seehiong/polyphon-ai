@@ -185,7 +185,7 @@ polyphon doctor
 ```bash
 # 1. Clone repository
 git clone https://github.com/seehiong/polyphon-ai.git
-cd polyphon
+cd polyphon-ai
 
 # 2. Sync all dependencies into isolated virtual environment (.venv)
 uv sync --all-extras

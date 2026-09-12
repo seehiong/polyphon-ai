@@ -21,6 +21,8 @@ function openEnrollModal(e, speakerId, currentName) {
   if (nameInput) {
     nameInput.value = (currentName && !currentName.startsWith('SPEAKER_')) ? currentName : '';
   }
+  const replaceCheckbox = document.getElementById('enroll-replace-checkbox');
+  if (replaceCheckbox) replaceCheckbox.checked = false;
 
   if (modal) {
     modal.classList.remove('hidden');
@@ -65,6 +67,9 @@ async function submitEnrollSpeaker() {
   submitBtn.className = "px-4 py-2 rounded-xl text-xs font-semibold bg-slate-800 text-slate-400 cursor-not-allowed shadow transition flex items-center gap-2";
   submitLabel.textContent = "Extracting Voiceprint...";
 
+  const replaceCheckbox = document.getElementById('enroll-replace-checkbox');
+  const replace = replaceCheckbox ? replaceCheckbox.checked : false;
+
   try {
     const resp = await fetch('/api/speakers/enroll_from_meeting', {
       method: 'POST',
@@ -72,7 +77,8 @@ async function submitEnrollSpeaker() {
       body: JSON.stringify({
         meeting_id: meetingId,
         speaker_id: currentEnrollSpeakerId,
-        name: name
+        name: name,
+        replace: replace
       })
     });
 
@@ -190,7 +196,8 @@ async function submitEnrollSpeaker() {
 
     checkSystemStatus();
     closeEnrollModal();
-    showNotification(`🎉 Enrolled "${name}" into VoiceDB! Future meetings will automatically recognize this voice.`);
+    const replaceNote = replace ? ' (previous voiceprint & samples replaced)' : '';
+    showNotification(`🎉 Enrolled "${name}" into VoiceDB${replaceNote}! Future meetings will automatically recognize this voice.`);
 
   } catch (err) {
     console.error("Enroll error:", err);

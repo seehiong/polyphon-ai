@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -53,8 +54,22 @@ class VoiceDB:
         embedding: np.ndarray,
         speaker_id: str | None = None,
         audio_path: str | None = None,
+        source: str | None = None,
+        replace: bool = False,
     ) -> str:
-        """Enroll a new speaker or update an existing profile with an embedding."""
+        """Enroll a new speaker or update an existing profile with an embedding.
+
+        Each call that supplies `audio_path` appends a new entry to that speaker's
+        `samples` list (with `source`, e.g. a meeting name, and a timestamp) rather
+        than overwriting the previous one, so re-enrolling the same person from a
+        different meeting keeps every sample browsable instead of discarding it.
+
+        By default a re-enrollment blends into the existing embedding (0.7 old / 0.3
+        new), which only partially corrects a prior enrollment that captured the
+        wrong voice — it takes several rounds to dilute out bad data. Pass
+        `replace=True` to discard the existing embedding and sample history outright
+        and start clean from this enrollment instead.
+        """
         spk_id = speaker_id or name.lower().replace(" ", "_")
         embedding_file = self.embeddings_dir / f"{spk_id}.npy"
 
@@ -62,7 +77,7 @@ class VoiceDB:
         norm = np.linalg.norm(embedding)
         norm_emb = (embedding / norm) if norm > 0 else embedding
 
-        if embedding_file.exists():
+        if not replace and embedding_file.exists():
             try:
                 existing = np.load(embedding_file)
                 # Running average of centroids
@@ -75,14 +90,63 @@ class VoiceDB:
         np.save(embedding_file, norm_emb)
         self._embedding_cache[spk_id] = norm_emb.copy()
 
+        existing_entry = {} if replace else self.registry.get(spk_id, {})
+        samples = list(existing_entry.get("samples", []))
+        if not samples and existing_entry.get("sample_audio"):
+            # Migrate a pre-existing single sample_audio into the samples list.
+            samples.append({"path": existing_entry["sample_audio"]})
+        if audio_path:
+            sample_entry: dict[str, str] = {
+                "path": str(audio_path),
+                "added_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if source:
+                sample_entry["source"] = source
+            samples.append(sample_entry)
+
         self.registry[spk_id] = {
             "name": name,
             "id": spk_id,
             "embedding_file": str(embedding_file),
-            "sample_audio": str(audio_path) if audio_path else None,
+            "sample_audio": str(audio_path) if audio_path else existing_entry.get("sample_audio"),
+            "samples": samples,
         }
         self._save_registry()
         return spk_id
+
+    def set_embedding(self, speaker_id: str, embedding: np.ndarray) -> bool:
+        """Directly overwrite a speaker's stored embedding (no blending)."""
+        if speaker_id not in self.registry:
+            return False
+        norm = np.linalg.norm(embedding)
+        norm_emb = (embedding / norm) if norm > 0 else embedding
+        embedding_file = self.embeddings_dir / f"{speaker_id}.npy"
+        np.save(embedding_file, norm_emb)
+        self._embedding_cache[speaker_id] = norm_emb.copy()
+        return True
+
+    def delete_sample(self, speaker_id: str, sample_index: int) -> dict | None:
+        """Remove one enrollment sample from a speaker's history.
+
+        Returns the removed sample entry (so the caller can delete its audio file
+        and/or recompute the embedding from whatever samples remain), or None if
+        the speaker/index doesn't exist.
+        """
+        entry = self.registry.get(speaker_id)
+        if not entry:
+            return None
+        samples = list(entry.get("samples", []))
+        if not samples and entry.get("sample_audio"):
+            samples = [{"path": entry["sample_audio"]}]
+        if sample_index < 0 or sample_index >= len(samples):
+            return None
+
+        removed = samples.pop(sample_index)
+        entry["samples"] = samples
+        entry["sample_audio"] = samples[-1]["path"] if samples else None
+        self.registry[speaker_id] = entry
+        self._save_registry()
+        return removed
 
     def get_speaker(self, name_or_id: str) -> dict | None:
         """Retrieve speaker metadata by ID or display name."""
@@ -91,6 +155,14 @@ class VoiceDB:
             if k.lower() == target or v.get("name", "").strip().lower() == target:
                 return v
         return None
+
+    def rename_speaker(self, speaker_id: str, new_name: str) -> bool:
+        """Update an enrolled speaker's display name, keeping their id and voiceprint unchanged."""
+        if speaker_id not in self.registry:
+            return False
+        self.registry[speaker_id]["name"] = new_name
+        self._save_registry()
+        return True
 
     def delete_speaker(self, name_or_id: str) -> bool:
         """Delete an enrolled speaker profile and remove their embedding file."""
@@ -109,16 +181,23 @@ class VoiceDB:
         self._save_registry()
         return True
 
-    def list_speakers(self) -> list[dict[str, str]]:
-        """List all enrolled speakers in the database."""
-        return [
-            {
-                "id": k,
-                "name": v["name"],
-                "sample_audio": v.get("sample_audio"),
-            }
-            for k, v in self.registry.items()
-        ]
+    def list_speakers(self) -> list[dict]:
+        """List all enrolled speakers in the database, with every enrollment sample."""
+        result = []
+        for k, v in self.registry.items():
+            samples = v.get("samples")
+            if not samples and v.get("sample_audio"):
+                # Older entries enrolled before multi-sample tracking existed.
+                samples = [{"path": v["sample_audio"]}]
+            result.append(
+                {
+                    "id": k,
+                    "name": v["name"],
+                    "sample_audio": v.get("sample_audio"),
+                    "samples": samples or [],
+                }
+            )
+        return result
 
     def identify(self, query_embedding: np.ndarray, threshold: float = 0.65) -> tuple[str | None, float]:
         """Match a query embedding against the enrolled voiceprints using vectorized cosine similarity.

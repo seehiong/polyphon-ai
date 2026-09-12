@@ -306,6 +306,19 @@ function attachPlayerListeners(player) {
       }
     }
 
+    // currentTime can fall in a gap between turns (trailing silence, a pause
+    // before the first word, applause after the last one) where no segment
+    // matches — pin to the nearest turn instead of leaving auto-scroll stuck.
+    if (!activeCard && turnCardIndex.length > 0) {
+      const last = turnCardIndex[turnCardIndex.length - 1];
+      const first = turnCardIndex[0];
+      if (currentTime > last.end) {
+        activeCard = last.card;
+      } else if (currentTime < first.start) {
+        activeCard = first.card;
+      }
+    }
+
     // Trigger turn change & centering exactly ONCE per turn transition!
     if (activeCard && activeCard !== currentActiveCard) {
       if (currentActiveCard) {
@@ -372,6 +385,12 @@ function renderResultsUI(payload) {
     }
   }
 
+  // Regenerate Summary button: only useful once a transcript already exists
+  const regenSummaryBtn = document.getElementById('btn-regenerate-summary');
+  if (regenSummaryBtn) {
+    regenSummaryBtn.classList.toggle('hidden', isLiveOnly);
+  }
+
   // Show/Hide Compare button and transcript toggle
   const compareBtn = document.getElementById('btn-compare-transcripts');
   const toggleGroup = document.getElementById('transcript-mode-toggle');
@@ -423,11 +442,13 @@ function renderResultsUI(payload) {
 
   // Export Links
   const stem = payload.job_id || 'meeting';
+  const momBtn = document.getElementById('btn-export-mom');
   const htmlBtn = document.getElementById('btn-export-html');
   const mdBtn = document.getElementById('btn-export-md');
   const jsonBtn = document.getElementById('btn-export-json');
   const srtBtn = document.getElementById('btn-export-srt');
 
+  momBtn.href = `/reports/${stem}_mom.html`;
   htmlBtn.href = payload.html_report_url || `/reports/${stem}.html`;
   mdBtn.href = `/reports/${stem}.md`;
   jsonBtn.href = `/reports/${stem}.json`;
@@ -443,6 +464,18 @@ function renderResultsUI(payload) {
       el.classList.remove('opacity-40', 'pointer-events-none');
     }
   });
+
+  // Minutes of Meeting needs actual insights (summary/decisions/actions), not just a transcript
+  const hasInsights = Boolean(payload.result && payload.result.insights && payload.result.insights.summary);
+  if (momBtn) {
+    if (!hasInsights) {
+      momBtn.classList.add('opacity-40', 'pointer-events-none');
+      momBtn.setAttribute('title', 'Run full processing or Regenerate Summary first to generate Minutes of Meeting');
+    } else {
+      momBtn.classList.remove('opacity-40', 'pointer-events-none');
+      momBtn.setAttribute('title', 'Open a professional, shareable Minutes of Meeting document — attendees, discussion summary, decisions, and action items (no raw transcript)');
+    }
+  }
 
   // Setup Unified Media Player
   const vEl = document.getElementById('video-player');

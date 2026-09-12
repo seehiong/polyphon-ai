@@ -1,6 +1,12 @@
 """Polyphon: Local, identity-aware speech transcription and diarization engine."""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
+
+try:
+    __version__ = _pkg_version("polyphon-ai")
+except PackageNotFoundError:  # running from a source tree that is not installed
+    __version__ = "0.0.0.dev0"
 
 # Load .env before any submodule reads os.environ for defaults.
 from polyphon.config import load_env

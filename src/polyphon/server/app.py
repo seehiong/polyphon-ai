@@ -49,6 +49,7 @@ class EnrollFromMeetingRequest(BaseModel):
     meeting_id: str
     speaker_id: str
     name: str
+    replace: bool = False
 
 
 class AssignSpeakersRequest(BaseModel):
@@ -172,15 +173,17 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
 
         stem = Path(filename).stem
         ext = Path(filename).suffix.lower()
+        is_mom = stem.endswith("_mom")
 
         # Check if corresponding .json exists in outputs or project directory
+        json_stem = stem.removesuffix("_mom") if is_mom else stem
         json_candidates = [
-            resolved_out_dir / f"{stem}.json",
-            Path("examples") / f"{stem}.json",
-            Path(f"{stem}.json"),
+            resolved_out_dir / f"{json_stem}.json",
+            Path("examples") / f"{json_stem}.json",
+            Path(f"{json_stem}.json"),
         ]
-        if "_" in stem:
-            base = stem.rsplit("_", 1)[0]
+        if "_" in json_stem:
+            base = json_stem.rsplit("_", 1)[0]
             json_candidates.append(resolved_out_dir / f"{base}.json")
             json_candidates.append(Path("examples") / f"{base}.json")
             json_candidates.append(Path(f"{base}.json"))
@@ -192,7 +195,15 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
                     data = json.load(jf)
                 result = PolyphonResult.from_dict(data)
 
-                if ext == ".html":
+                if is_mom and ext == ".html":
+                    from datetime import datetime
+
+                    meeting_date = datetime.fromtimestamp(json_file.stat().st_mtime).strftime("%B %d, %Y")
+                    mom_content = result.to_mom_html(title=data.get("title"), meeting_date=meeting_date)
+                    out_path = resolved_out_dir / f"{stem}.html"
+                    out_path.write_text(mom_content, encoding="utf-8")
+                    return FileResponse(out_path)
+                elif ext == ".html":
                     html_content = result.to_html(title=f"Polyphon Report: {stem}")
                     out_path = resolved_out_dir / f"{stem}.html"
                     out_path.write_text(html_content, encoding="utf-8")
@@ -379,6 +390,52 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
                 auto_enroll=auto_enroll,
                 summarize=summarize,
                 language=language,
+                clean_fillers=clean_fillers,
+            )
+        )
+
+        return {"job_id": job_id, "status": "pending"}
+
+    @app.post("/api/meetings/{meeting_id:path}/resummarize")
+    async def resummarize_meeting(meeting_id: str, clean_fillers: bool = Form(False)):
+        """Re-run only the LLM insights step against an already-processed meeting's saved
+        transcript, without re-running transcription or diarization."""
+        from urllib.parse import unquote
+
+        clean_id = unquote(meeting_id).strip()
+        stem = Path(clean_id).stem
+
+        # currentLoadedMeetingId on the frontend can be a job UUID rather than the file
+        # stem (renderResultsUI sets it from the just-completed job's id) — resolve it.
+        for jid, j in list(jobs.items()):
+            j_stem = Path(j.filename).stem if getattr(j, "filename", None) else None
+            j_file_stem = j.filepath.stem if getattr(j, "filepath", None) else None
+            if clean_id in (jid, j.job_id, j.filename, j_stem, j_file_stem):
+                if j_file_stem:
+                    stem = j_file_stem
+                break
+
+        json_file = resolved_out_dir / f"{stem}.json"
+        if not json_file.exists():
+            raise HTTPException(status_code=404, detail=f"Meeting '{meeting_id}' not found")
+
+        data = json.loads(json_file.read_text(encoding="utf-8"))
+        if not data.get("segments"):
+            raise HTTPException(
+                status_code=400,
+                detail="This meeting has no transcript yet — run full processing first.",
+            )
+
+        job_id = uuid.uuid4().hex
+        loop = asyncio.get_running_loop()
+        job = JobState(job_id=job_id, filename=f"{stem}.wav", filepath=resolved_out_dir / f"{stem}.wav", loop=loop)
+        jobs[job_id] = job
+
+        asyncio.create_task(
+            _run_resummarize_job(
+                job=job,
+                output_dir=resolved_out_dir,
+                stem=stem,
                 clean_fillers=clean_fillers,
             )
         )
@@ -718,8 +775,16 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
                 md_file = resolved_out_dir / f"{matched_stem}.md"
                 if md_file.exists():
                     md_file.write_text(poly_res.to_markdown(title=new_title), encoding="utf-8")
+                mom_file = resolved_out_dir / f"{matched_stem}_mom.html"
+                if mom_file.exists() and poly_res.insights:
+                    from datetime import datetime
+
+                    meeting_date = datetime.fromtimestamp(json_file.stat().st_mtime).strftime("%B %d, %Y")
+                    mom_file.write_text(
+                        poly_res.to_mom_html(title=new_title, meeting_date=meeting_date), encoding="utf-8"
+                    )
             except Exception as e:
-                logger.warning("Could not re-render HTML/MD reports on rename: %s", e)
+                logger.warning("Could not re-render HTML/MD/MOM reports on rename: %s", e)
 
             # Update in-memory job if active
             for _jid, j in list(jobs.items()):
@@ -788,7 +853,7 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
         return vdb.list_speakers()
 
     @app.post("/api/speakers/enroll")
-    async def enroll_speaker(name: str = Form(...), file: UploadFile = File(...)):
+    async def enroll_speaker(name: str = Form(...), file: UploadFile = File(...), replace: bool = Form(False)):
         """Enroll a new voice profile from audio sample."""
         sample_path = uploads_dir / f"sample_{uuid.uuid4().hex[:6]}_{file.filename}"
         with sample_path.open("wb") as buffer:
@@ -800,8 +865,22 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
         embedding = diarizer.extract_single_embedding(str(sample_path))
 
         vdb = VoiceDB()
-        slug = vdb.enroll(name=name, embedding=embedding, audio_path=str(sample_path))
+        slug = vdb.enroll(
+            name=name, embedding=embedding, audio_path=str(sample_path), source="Direct upload", replace=replace
+        )
         return {"status": "enrolled", "id": slug, "name": name}
+
+    @app.post("/api/speakers/{speaker_id}/rename")
+    async def rename_speaker(speaker_id: str, payload: dict[str, Any]):
+        """Rename an enrolled speaker's display name in VoiceDB."""
+        new_name = (payload.get("name") or "").strip()
+        if not new_name:
+            raise HTTPException(status_code=400, detail="Name cannot be empty")
+        vdb = VoiceDB()
+        success = vdb.rename_speaker(speaker_id, new_name)
+        if not success:
+            raise HTTPException(status_code=404, detail="Speaker profile not found")
+        return {"status": "renamed", "id": speaker_id, "name": new_name}
 
     @app.delete("/api/speakers/{speaker_id}")
     async def delete_speaker(speaker_id: str):
@@ -811,6 +890,86 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
         if not success:
             raise HTTPException(status_code=404, detail="Speaker profile not found")
         return {"status": "deleted", "id": speaker_id}
+
+    @app.api_route("/api/speakers/{speaker_id}/samples/{sample_index}/audio", methods=["GET", "HEAD"])
+    async def get_speaker_sample_audio(speaker_id: str, sample_index: int):
+        """Stream one of a speaker's enrollment audio samples for in-browser playback.
+
+        Deliberately separate from the general /media endpoint: the path served here
+        always comes from our own VoiceDB registry rather than a client-supplied
+        filename, so it can't be used to read arbitrary files off disk.
+        """
+        vdb = VoiceDB()
+        speaker = vdb.get_speaker(speaker_id)
+        if not speaker:
+            raise HTTPException(status_code=404, detail="Speaker profile not found")
+
+        samples = speaker.get("samples") or ([{"path": speaker["sample_audio"]}] if speaker.get("sample_audio") else [])
+        if sample_index < 0 or sample_index >= len(samples):
+            raise HTTPException(status_code=404, detail="Sample not found")
+
+        sample_path = Path(samples[sample_index]["path"])
+        if not sample_path.exists() or not sample_path.is_file():
+            raise HTTPException(status_code=404, detail="This sample's audio file is no longer available on disk")
+
+        return FileResponse(sample_path, headers={"Accept-Ranges": "bytes"})
+
+    @app.delete("/api/speakers/{speaker_id}/samples/{sample_index}")
+    async def delete_speaker_sample(speaker_id: str, sample_index: int):
+        """Remove one bad enrollment sample and re-derive the voiceprint from what's left.
+
+        Deleting a sample also deletes its audio file and recomputes the speaker's
+        embedding fresh from the remaining samples (rather than leaving the old
+        blended embedding, which could still carry the deleted sample's influence),
+        so a mistaken enrollment can be fully corrected without deleting and
+        re-enrolling the whole speaker.
+        """
+        import numpy as np
+
+        vdb = VoiceDB()
+        removed = vdb.delete_sample(speaker_id, sample_index)
+        if removed is None:
+            raise HTTPException(status_code=404, detail="Speaker or sample not found")
+
+        removed_path = Path(removed["path"])
+        if removed_path.exists() and removed_path.is_file():
+            try:
+                removed_path.unlink()
+            except OSError as e:
+                logger.warning("Could not delete sample audio %s: %s", removed_path, e)
+
+        speaker = vdb.get_speaker(speaker_id) or {}
+        remaining_samples = speaker.get("samples") or []
+
+        reconciled = False
+        reconciled_from = 0
+        if remaining_samples:
+            from polyphon.diarization.base import PyannoteDiarizer
+
+            diarizer = PyannoteDiarizer()
+            embs = []
+            for sample in remaining_samples:
+                p = Path(sample["path"])
+                if not p.exists() or not p.is_file():
+                    continue
+                try:
+                    embs.append(diarizer.extract_single_embedding(str(p)))
+                except Exception as e:
+                    logger.warning("Could not re-extract embedding for %s: %s", p, e)
+            if embs:
+                avg_emb = np.mean(embs, axis=0)
+                vdb.set_embedding(speaker_id, avg_emb)
+                reconciled = True
+                reconciled_from = len(embs)
+
+        return {
+            "status": "deleted",
+            "id": speaker_id,
+            "removed_sample": removed,
+            "remaining_samples": len(remaining_samples),
+            "embedding_reconciled": reconciled,
+            "embedding_reconciled_from": reconciled_from,
+        }
 
     @app.post("/api/speakers/enroll_from_meeting")
     async def enroll_speaker_from_meeting(req: EnrollFromMeetingRequest):
@@ -976,11 +1135,14 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
         norm = np.linalg.norm(avg_emb)
         norm_emb = (avg_emb / norm) if norm > 0 else avg_emb
 
-        # 5. Extract a short audio sample snippet for VoiceDB preview
+        # 5. Extract a short audio sample snippet for VoiceDB preview. Filename includes
+        # the meeting stem and a short hash so re-enrolling the same person from a
+        # different (or the same) meeting doesn't silently overwrite a prior sample.
         vdb_samples_dir = resolved_out_dir / "samples"
         vdb_samples_dir.mkdir(exist_ok=True)
         slug = new_name.lower().replace(" ", "_")
-        sample_audio_path = vdb_samples_dir / f"sample_{slug}.wav"
+        source_label = matched_stem or "meeting"
+        sample_audio_path = vdb_samples_dir / f"sample_{slug}_{source_label}_{uuid.uuid4().hex[:6]}.wav"
 
         best_seg = viable_segments[0]
         s_start = max(0.0, float(best_seg.get("start", 0.0)))
@@ -1013,6 +1175,8 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
             embedding=norm_emb,
             speaker_id=slug,
             audio_path=str(sample_audio_path) if sample_audio_path else None,
+            source=matched_stem,
+            replace=req.replace,
         )
 
         # 7. Propagate updated name across meeting manifest
@@ -1094,7 +1258,12 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
             if dur <= 0:
                 dur = max(s.end for s in all_segs)
             recomputed = ReconciliationEngine.compute_speaker_stats(all_segs, dur)
-            manifest_data.setdefault("insights", {})["speaker_stats"] = {k: asdict(v) for k, v in recomputed.items()}
+            # setdefault only fills in a *missing* key — a meeting processed without
+            # summarization has "insights": null explicitly present, which setdefault
+            # leaves as None, so index into a plain dict instead.
+            if manifest_data.get("insights") is None:
+                manifest_data["insights"] = {}
+            manifest_data["insights"]["speaker_stats"] = {k: asdict(v) for k, v in recomputed.items()}
 
         manifest_path.write_text(json.dumps(manifest_data, indent=2), encoding="utf-8")
 
@@ -1243,7 +1412,19 @@ def create_app(output_dir: str | Path | None = None) -> FastAPI:
                             req_lang = None
                         session_name = payload.get("name") or f"live_{int(time.time())}"
                         session_title = payload.get("title")
-                        d_backend = SortformerDiarizer() if req_diarizer == "sortformer" else PyannoteDiarizer()
+                        req_max_speakers = payload.get("max_speakers")
+                        try:
+                            req_max_speakers = int(req_max_speakers) if req_max_speakers else None
+                        except (TypeError, ValueError):
+                            req_max_speakers = None
+                        if req_diarizer == "sortformer":
+                            d_backend = (
+                                SortformerDiarizer(max_speakers=req_max_speakers)
+                                if req_max_speakers and req_max_speakers > 0
+                                else SortformerDiarizer()
+                            )
+                        else:
+                            d_backend = PyannoteDiarizer()
                         vdb = VoiceDB() if req_identify else None
 
                         # Cancel previous worker
@@ -1385,7 +1566,7 @@ async def _run_pipeline_job(
         if diarize:
             orig_diarize = engine.diarizer.diarize
 
-            def hooked_diarize(path, show_progress=False):
+            def hooked_diarize(path, show_progress=False, **diarize_kwargs):
                 job.update(
                     stage=2,
                     stage_name="Diarizing speaker turns (Pyannote 3.1)",
@@ -1409,7 +1590,7 @@ async def _run_pipeline_job(
                 ticker_t = threading.Thread(target=diarize_ticker, daemon=True)
                 ticker_t.start()
                 try:
-                    res = orig_diarize(path, show_progress=False)
+                    res = orig_diarize(path, show_progress=False, **diarize_kwargs)
                 finally:
                     stop_diarize_ticker.set()
 
@@ -1485,6 +1666,7 @@ async def _run_pipeline_job(
         html_file = output_dir / f"{stem}.html"
         md_file = output_dir / f"{stem}.md"
         srt_file = output_dir / f"{stem}.srt"
+        mom_file = output_dir / f"{stem}_mom.html"
 
         # Check if an existing live session exists or live_segments already saved
         existing_live_segments = None
@@ -1532,6 +1714,11 @@ async def _run_pipeline_job(
         )
         md_file.write_text(result.to_markdown(title=existing_title, clean_fillers=clean_fillers), encoding="utf-8")
         srt_file.write_text(result.to_srt(clean_fillers=clean_fillers), encoding="utf-8")
+        if result.insights:
+            from datetime import datetime
+
+            meeting_date = datetime.fromtimestamp(job.created_at).strftime("%B %d, %Y")
+            mom_file.write_text(result.to_mom_html(title=existing_title, meeting_date=meeting_date), encoding="utf-8")
 
         # Convert result to serializable dict
         res_dict = {
@@ -1554,6 +1741,113 @@ async def _run_pipeline_job(
             stage_name="Complete",
             percent=100.0,
             details=f"Processed in {total_elapsed}s • All files generated",
+        )
+
+    try:
+        await loop.run_in_executor(None, sync_worker)
+    except Exception as e:
+        job.error = str(e)
+        job.update(status="failed", stage_name="Failed", details=str(e))
+
+
+async def _run_resummarize_job(job: JobState, output_dir: Path, stem: str, clean_fillers: bool = False):
+    """Re-run only the LLM insights extraction against an already-saved transcript."""
+    loop = asyncio.get_running_loop()
+
+    def sync_worker():
+        t_start = time.time()
+        json_file = output_dir / f"{stem}.json"
+        data = json.loads(json_file.read_text(encoding="utf-8"))
+        existing_title = data.get("title")
+
+        job.update(
+            status="processing",
+            stage=1,
+            stage_name="Regenerating executive summary",
+            percent=10.0,
+            details="Loading saved transcript...",
+        )
+
+        poly_res = PolyphonResult.from_dict(data)
+        md = poly_res.to_markdown(clean_fillers=clean_fillers)
+
+        llm = OpenAICompatibleLLM()
+        job.update(percent=30.0, details=f"Prompting local {llm.model} model...")
+
+        stop_ticker = threading.Event()
+
+        def llm_ticker():
+            t0 = time.time()
+            while not stop_ticker.is_set():
+                time.sleep(1.5)
+                elapsed = int(time.time() - t0)
+                curr_pct = min(30.0 + (elapsed / 3.0), 95.0)
+                job.update(
+                    percent=round(curr_pct, 1),
+                    details=f"Analyzing dialogue & extracting decisions ({elapsed}s elapsed)...",
+                )
+
+        ticker_t = threading.Thread(target=llm_ticker, daemon=True)
+        ticker_t.start()
+        try:
+            insights = llm.extract_insights(md)
+        finally:
+            stop_ticker.set()
+
+        from polyphon.reconciliation.base import ReconciliationEngine
+
+        insights.speaker_stats = ReconciliationEngine.compute_speaker_stats(poly_res.segments, poly_res.duration)
+        poly_res.insights = insights
+        if existing_title:
+            poly_res.title = existing_title
+
+        job.update(stage=1, percent=98.0, details="Saving updated reports...")
+
+        json_dict = json.loads(poly_res.to_json())
+        if existing_title:
+            json_dict["title"] = existing_title
+        if data.get("live_segments"):
+            json_dict["live_segments"] = data["live_segments"]
+        json_file.write_text(json.dumps(json_dict, indent=2), encoding="utf-8")
+
+        html_file = output_dir / f"{stem}.html"
+        md_file = output_dir / f"{stem}.md"
+        if html_file.exists():
+            html_file.write_text(
+                poly_res.to_html(title=existing_title or f"Polyphon Report: {stem}", clean_fillers=clean_fillers),
+                encoding="utf-8",
+            )
+        if md_file.exists():
+            md_file.write_text(
+                poly_res.to_markdown(title=existing_title, clean_fillers=clean_fillers), encoding="utf-8"
+            )
+
+        from datetime import datetime
+
+        mom_file = output_dir / f"{stem}_mom.html"
+        meeting_date = datetime.fromtimestamp(json_file.stat().st_mtime).strftime("%B %d, %Y")
+        mom_file.write_text(poly_res.to_mom_html(title=existing_title, meeting_date=meeting_date), encoding="utf-8")
+
+        res_dict = {
+            "duration": poly_res.duration,
+            "language": poly_res.language,
+            "speakers": [asdict(s) for s in poly_res.speakers],
+            "segments": [asdict(s) for s in poly_res.segments],
+            "insights": asdict(poly_res.insights) if poly_res.insights else None,
+        }
+        if existing_title:
+            res_dict["title"] = existing_title
+        if data.get("live_segments"):
+            res_dict["live_segments"] = data["live_segments"]
+
+        total_elapsed = int(time.time() - t_start)
+        job.result = res_dict
+        job.update(
+            status="completed",
+            stage=1,
+            stage_name="Complete",
+            percent=100.0,
+            details=f"Summary regenerated in {total_elapsed}s",
         )
 
     try:

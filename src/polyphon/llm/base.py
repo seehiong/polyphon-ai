@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from abc import ABC, abstractmethod
 
-from polyphon.types import ActionItem, Insights
+from polyphon.types import ActionItem, DiscussionPoint, Insights
 
 
 def extract_json_object(raw_text: str) -> dict | None:
@@ -161,6 +161,10 @@ class OpenAICompatibleLLM(LLMBackend):
             "{\n"
             '  "summary": "Concise 3-5 sentence executive overview of the meeting.",\n'
             '  "topics": ["Key Topic 1", "Key Topic 2", "Key Topic 3"],\n'
+            '  "discussion_points": [\n'
+            '    {"topic": "Short topic title", "summary": "2-3 sentence summary of what was discussed on '
+            'this topic, including any disagreements or context — written for someone who was not there."}\n'
+            "  ],\n"
             '  "decisions": ["Agreed decision 1", "Agreed decision 2"],\n'
             '  "action_items": [\n'
             '    {"task": "Actionable task description", "assignee": "Speaker name or null", "due_date": null}\n'
@@ -168,6 +172,9 @@ class OpenAICompatibleLLM(LLMBackend):
             "}\n"
             "Instructions:\n"
             "- Be concise and focus on concrete decisions and action items.\n"
+            "- discussion_points should cover every substantive topic raised (typically 3-6 entries), in the "
+            "order the meeting covered them, suitable for a Minutes of Meeting document shared with attendees.\n"
+            "- topics is a short flat list mirroring discussion_points' topic titles, for tagging/search.\n"
             "- Do not quote lengthy dialogue inside the JSON.\n"
             "- Return ONLY the valid JSON object without markdown code fences or conversational text."
         )
@@ -237,11 +244,18 @@ class OpenAICompatibleLLM(LLMBackend):
                 elif isinstance(item, str):
                     action_items.append(ActionItem(task=item))
 
+            discussion_points = [
+                DiscussionPoint(topic=str(item["topic"]), summary=str(item.get("summary", "")))
+                for item in parsed.get("discussion_points", [])
+                if isinstance(item, dict) and item.get("topic")
+            ]
+
             return Insights(
                 summary=str(parsed.get("summary", "")),
                 topics=[str(t) for t in parsed.get("topics", [])],
                 decisions=[str(d) for d in parsed.get("decisions", [])],
                 action_items=action_items,
+                discussion_points=discussion_points,
             )
 
         except (urllib.error.URLError, TimeoutError, OSError) as err:
@@ -269,9 +283,13 @@ class OpenAICompatibleLLM(LLMBackend):
             err_str = str(err)
             if "Empty or unparseable" in err_str:
                 detail = (
-                    "⚠️ Failed to parse structured insights: LLM returned an empty response. "
-                    "If using Ollama, the meeting transcript likely exceeded its default 4096-token "
-                    "context window (num_ctx). Raise num_ctx on your model (e.g. PARAMETER num_ctx 16384 in a Modelfile)."
+                    f"⚠️ Failed to parse structured insights: LLM returned an empty response from "
+                    f"'{self.model}' with POLYPHON_LLM_MAX_TOKENS={self.max_tokens}. Reasoning models "
+                    "(e.g. Qwen3) can spend this entire budget on internal <think> reasoning before "
+                    "ever emitting the final JSON, cutting the response off empty — raise "
+                    "POLYPHON_LLM_MAX_TOKENS to give it room to finish. If the transcript itself is "
+                    "unusually long, also check your model server's context window (num_ctx for "
+                    "Ollama, --ctx-size for llama-server, --max-model-len for vLLM)."
                 )
             else:
                 detail = f"⚠️ Failed to parse structured insights from LLM response ({err})."
