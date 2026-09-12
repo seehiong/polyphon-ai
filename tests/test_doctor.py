@@ -1,8 +1,14 @@
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from polyphon.cli import app
+
+# `doctor` probes the real audio stack, and these tests patch torchcodec
+# directly. torchcodec arrives with the [diarization] extra, so skip rather
+# than fail in lean environments (such as the CI test matrix) without it.
+pytest.importorskip("torchcodec")
 
 runner = CliRunner()
 

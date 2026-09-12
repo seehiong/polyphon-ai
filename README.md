@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="https://raw.githubusercontent.com/seehiong/polyphon/main/assets/logo.jpg" alt="Polyphon AI Logo" width="360" style="border-radius: 12px; margin-bottom: 16px;" />
+<img src="https://raw.githubusercontent.com/seehiong/polyphon-ai/main/assets/logo.jpg" alt="Polyphon AI Logo" width="360" style="border-radius: 12px; margin-bottom: 16px;" />
 
 # Polyphon AI
 
@@ -184,7 +184,7 @@ polyphon doctor
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/seehiong/polyphon.git
+git clone https://github.com/seehiong/polyphon-ai.git
 cd polyphon
 
 # 2. Sync all dependencies into isolated virtual environment (.venv)
@@ -382,7 +382,7 @@ uv run pytest -v
 #### Alternative: Using standard `venv` + `pip`
 ```bash
 # Clone the repository
-git clone https://github.com/seehiong/polyphon.git
+git clone https://github.com/seehiong/polyphon-ai.git
 cd polyphon
 
 # Create and activate virtual environment (Python 3.10+)
@@ -657,7 +657,7 @@ uv run polyphon serve --self-signed --host 0.0.0.0 --port 7860
 > *(You can also provide custom certificates with `--ssl-certfile cert.pem --ssl-keyfile key.pem`).*
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/seehiong/polyphon/main/assets/studio_preview.png" alt="Polyphon AI Studio Workspace" width="100%" style="border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);" />
+  <img src="https://raw.githubusercontent.com/seehiong/polyphon-ai/main/assets/studio_preview.png" alt="Polyphon AI Studio Workspace" width="100%" style="border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);" />
 </p>
 
 ### Core Tabs & Capabilities:
